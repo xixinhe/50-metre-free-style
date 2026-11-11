@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>自由泳节奏冲刺</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap">
+<style>
+:root{
+  --deck:#DDEEF2; --ink:#0D2B45; --muted:#4F6E84; --panel:#FFFFFF; --edge:#B9D6E0;
+  --cap:#FFC93C; --go:#0F6AAB; --go-ink:#FFFFFF;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --deck:#081824; --ink:#E3F2FA; --muted:#8FB0C4; --panel:#10283A; --edge:#1F4258;
+    --go:#FFC93C; --go-ink:#0D2B45; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --deck:#081824; --ink:#E3F2FA; --muted:#8FB0C4; --panel:#10283A; --edge:#1F4258;
+  --go:#FFC93C; --go-ink:#0D2B45; color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+html,body{height:100%;margin:0}
+body{
+  background:var(--deck); color:var(--ink);
+  font-family:"Baloo 2","PingFang SC","Hiragino Sans GB","Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;
+  overflow:hidden; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+  -webkit-tap-highlight-color:transparent;
+}
+#app{height:100%;display:flex;flex-direction:column;max-width:560px;margin:0 auto}
+.hud{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:8px 14px 4px}
+.hud div{display:flex;flex-direction:column;line-height:1.05}
+.hud b{font-size:1.45rem;font-weight:800;font-variant-numeric:tabular-nums}
+.hud span{font-size:.78rem;color:var(--muted)}
+#stage{flex:1;position:relative;min-height:0}
+canvas{width:100%;height:100%;display:block;touch-action:none}
+.taps{position:absolute;inset:auto 0 10px 0;display:flex;pointer-events:none}
+.taps div{flex:1;text-align:center;font-weight:800;font-size:1.05rem;color:#fff;opacity:.55;
+  text-shadow:0 1px 3px rgba(0,30,60,.5);transition:transform .08s, opacity .08s}
+.taps div.on{opacity:1;transform:scale(1.25)}
+.overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;
+  background:rgba(8,40,64,.35)}
+.overlay[hidden]{display:none}
+.card{background:var(--panel);color:var(--ink);border-radius:22px;padding:22px 22px 18px;max-width:340px;width:100%;
+  box-shadow:0 12px 40px rgba(0,30,60,.3);border:1px solid var(--edge)}
+.card h1{font-size:1.9rem;line-height:1.1;margin:0 0 8px;font-weight:800}
+.card p{margin:0 0 10px;line-height:1.55;font-size:.98rem;color:var(--muted)}
+.card .big{font-size:3rem;font-weight:800;line-height:1;margin:4px 0 2px;color:var(--ink);font-variant-numeric:tabular-nums}
+.card button{margin-top:8px;width:100%;border:0;border-radius:999px;padding:13px 0;font:inherit;font-weight:800;
+  font-size:1.15rem;background:var(--go);color:var(--go-ink);cursor:pointer}
+.card button:focus-visible{outline:3px solid var(--cap);outline-offset:3px}
+.keys{font-size:.82rem}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="hud">
+    <div><b id="hTime">0.00</b><span>秒</span></div>
+    <div><b id="hDist">0</b><span>米 / 50</span></div>
+    <div><b id="hSpeed">0.0</b><span>米每秒</span></div>
+    <div><b id="hCombo">0</b><span>连击</span></div>
+  </div>
+  <div id="stage">
+    <canvas id="pool"></canvas>
+    <div class="taps"><div id="tapL">左手</div><div id="tapR">右手</div></div>
+
+    <div class="overlay" id="startOv">
+      <div class="card">
+        <h1>自由泳节奏冲刺</h1>
+        <p>左右两边轮流点屏幕，就像左右手交替划水。节奏越稳，游得越快。</p>
+        <p>同一只手连划两次会打水花减速；点得太急也没用，稳定才是关键。</p>
+        <p class="keys">电脑上可以用 ← → 方向键。</p>
+        <p id="bestStart"></p>
+        <button id="startBtn">开始比赛</button>
+      </div>
+    </div>
+
+    <div class="overlay" id="endOv" hidden>
+      <div class="card">
+        <h1 id="endTitle">第 1 名</h1>
+        <div class="big" id="endTime">0.00 秒</div>
+        <p id="endNote"></p>
+        <button id="againBtn">再游一次</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const LEN = 50, PLAYER = 1, VMAX = 2.55, IMPULSE = 0.95, DRAG = 0.9;
+  const stage = document.getElementById('stage');
+  const canvas = document.getElementById('pool');
+  const ctx = canvas.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const hTime=$('hTime'), hDist=$('hDist'), hSpeed=$('hSpeed'), hCombo=$('hCombo');
+  const tapL=$('tapL'), tapR=$('tapR');
+  const startOv=$('startOv'), endOv=$('endOv');
+
+  let W=0, H=0, dpr=1;
+  function resize(){
+    const r = stage.getBoundingClientRect();
+    dpr = Math.min(window.devicePixelRatio||1, 2);
+    W = r.width; H = r.height;
+    canvas.width = Math.round(W*dpr); canvas.height = Math.round(H*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function readBest(){ try{ const v=parseFloat(localStorage.getItem('freestyle-best')); return isFinite(v)?v:null; }catch(e){ return null; } }
+  function saveBest(v){ try{ localStorage.setItem('freestyle-best', String(v)); }catch(e){} }
+  function showBest(){ const b=readBest(); $('bestStart').textContent = b ? '你的最好成绩：'+b.toFixed(2)+' 秒' : ''; }
+  showBest();
+
+  // ---------- state ----------
+  let phase='ready', t=0, raceT=0, countdown=0, swimmers=[], particles=[], pops=[];
+  let lastSide=null, lastStrokeT=null, prevDt=null, combo=0, finishedCount=0, endTimer=0;
+
+  function makeSwimmers(){
+    const caps=['#FF7A59','#FFC93C','#5ED0A0','#B98CF0'];
+    const names=['小鲨','你','海豚','飞鱼'];
+    const base=[2.08,0,2.2,1.98];
+    return [0,1,2,3].map(i=>({
+      lane:i, pos:0, v:0, cap:caps[i], name:names[i], player:i===PLAYER,
+      target: base[i] + (Math.random()*0.1-0.05),
+      lastL:-9, lastR:-9, side:0, timer:Math.random()*0.3, finish:null, place:null
+    }));
+  }
+  swimmers = makeSwimmers();
+
+  function startRace(){
+    swimmers = makeSwimmers(); particles=[]; pops=[];
+    lastSide=null; lastStrokeT=null; prevDt=null; combo=0; finishedCount=0; endTimer=0;
+    raceT=0; countdown=3.0; phase='countdown';
+    startOv.hidden=true; endOv.hidden=true;
+  }
+  $('startBtn').onclick = startRace;
+  $('againBtn').onclick = startRace;
+
+  // ---------- geometry ----------
+  function geo(){
+    const m=10, x0=m, y0=m, pw=W-2*m, ph=H-2*m-36;
+    return {x0,y0,pw,ph,lw:pw/4, yStart:y0+ph-34, yEnd:y0+20};
+  }
+  function swimmerXY(s,g){
+    return { x:g.x0+g.lw*(s.lane+0.5), y:g.yStart-(Math.min(s.pos,LEN)/LEN)*(g.yStart-g.yEnd) };
+  }
+
+  // ---------- input ----------
+  function flash(el){ el.classList.add('on'); setTimeout(()=>el.classList.remove('on'),110); }
+  function pop(text,color,big){
+    const g=geo(), p=swimmerXY(swimmers[PLAYER],g);
+    pops.push({text,color,x:p.x,y:p.y-30,life:0.8,big:!!big});
+  }
+  function splash(x,y,n,spread){
+    for(let i=0;i<n;i++){
+      const a=Math.random()*Math.PI*2, sp=(0.4+Math.random())*spread;
+      particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:0.5+Math.random()*0.35,r:1.5+Math.random()*2.5});
+    }
+  }
+  function stroke(side){
+    flash(side==='L'?tapL:tapR);
+    if(phase==='countdown'){ pop('还没出发','#fff'); return; }
+    if(phase!=='race') return;
+    const me=swimmers[PLAYER];
+    if(me.finish!==null) return;
+    try{ navigator.vibrate && navigator.vibrate(8); }catch(e){}
+
+    const g=geo(), p=swimmerXY(me,g), s=sizeOf(g);
+    if(side==='L') me.lastL=t; else me.lastR=t;
+    const hx = p.x + (side==='L'?-1:1)*s*0.5, hy = p.y - s*2.4;
+
+    if(side===lastSide){
+      me.v*=0.6; combo=0; prevDt=null; lastStrokeT=raceT;
+      pop('打水花！','#FFFFFF',true); splash(hx,hy,18,60);
+      return;
+    }
+    let q=0.9, label='', col='#FFFFFF';
+    if(lastStrokeT!==null){
+      const dt=raceT-lastStrokeT;
+      if(dt<0.26){ q=0.25; label='太急了'; col='#FFD6CC'; combo=0; prevDt=null; }
+      else if(dt>1.0){ q=0.7; label='节奏断了'; col='#FFD6CC'; combo=0; prevDt=null; }
+      else{
+        if(prevDt){
+          const r=Math.abs(dt-prevDt)/prevDt;
+          if(r<0.12){ q=1; label='完美'; col='#FFE27A'; combo++; }
+          else if(r<0.25){ q=0.8; label='不错'; col='#BFF3DA'; combo++; }
+          else { q=0.55; label='乱了'; col='#FFD6CC'; combo=0; }
+        } else { combo++; }
+        prevDt=dt;
+      }
+    }
+    lastSide=side; lastStrokeT=raceT;
+    me.v=Math.min(VMAX, me.v + IMPULSE*q*(1+Math.min(combo,20)*0.012));
+    splash(hx,hy,6,30);
+    if(label) pop(label,col);
+  }
+
+  stage.addEventListener('pointerdown', e=>{
+    if(!startOv.hidden || !endOv.hidden) return;
+    e.preventDefault();
+    const r=stage.getBoundingClientRect();
+    stroke(e.clientX - r.left < r.width/2 ? 'L' : 'R');
+  });
+  window.addEventListener('keydown', e=>{
+    if(e.repeat) return;
+    if(e.key==='ArrowLeft'||e.key==='a'||e.key==='A'){ stroke('L'); e.preventDefault(); }
+    else if(e.key==='ArrowRight'||e.key==='d'||e.key==='D'||e.key==='l'||e.key==='L'){ stroke('R'); e.preventDefault(); }
+  });
+
+  // ---------- update ----------
+  function update(dt){
+    t+=dt;
+    if(phase==='countdown'){
+      countdown-=dt;
+      if(countdown<=0){
+        phase='race'; raceT=0;
+        swimmers.forEach(s=>{ s.v=1.7; });
+        const g=geo(); swimmers.forEach(s=>{ const p=swimmerXY(s,g); splash(p.x,p.y,14,50); });
+        pops.push({text:'出发！',color:'#FFFFFF',x:W/2,y:H*0.45,life:0.9,big:true});
+      }
+    }
+    if(phase==='race'||phase==='finishing'){
+      raceT+=dt;
+      swimmers.forEach(s=>{
+        if(s.finish!==null){ s.v*=Math.exp(-3*dt); s.pos+=s.v*dt*0.3; return; }
+        if(s.player){
+          s.v*=Math.exp(-DRAG*dt);
+        } else {
+          const goal=s.target*(1+0.04*Math.sin(raceT*1.6+s.lane*2));
+          s.v += (goal-s.v)*Math.min(1,dt*1.4);
+          s.timer-=dt;
+          if(s.timer<=0){ s.side^=1; if(s.side) s.lastL=t; else s.lastR=t; s.timer=0.42+Math.random()*0.04; }
+        }
+        s.pos+=s.v*dt;
+        if(s.pos>=LEN){
+          s.pos=LEN; s.finish=raceT; finishedCount++; s.place=finishedCount;
+          const g=geo(), p=swimmerXY(s,g); splash(p.x,p.y-10,20,70);
+          if(s.player){ phase='finishing'; endTimer=1.3; }
+        }
+      });
+      if(phase==='finishing'){ endTimer-=dt; if(endTimer<=0) showEnd(); }
+    }
+    particles.forEach(p=>{ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.92; p.vy*=0.92; p.life-=dt; });
+    particles=particles.filter(p=>p.life>0);
+    pops.forEach(p=>{ p.y-=40*dt; p.life-=dt; });
+    pops=pops.filter(p=>p.life>0);
+
+    // kick bubbles
+    if(phase==='race'||phase==='finishing'){
+      const g=geo(), s0=sizeOf(g);
+      swimmers.forEach(s=>{
+        if(s.finish!==null) return;
+        if(Math.random()<s.v*dt*6){
+          const p=swimmerXY(s,g);
+          particles.push({x:p.x+(Math.random()-0.5)*s0, y:p.y+s0*4.2, vx:(Math.random()-0.5)*20, vy:20+Math.random()*30, life:0.5, r:1.5+Math.random()*2});
+        }
+      });
+    }
+
+    const me=swimmers[PLAYER];
+    hTime.textContent = (me.finish!==null?me.finish:raceT).toFixed(2);
+    hDist.textContent = Math.floor(me.pos);
+    hSpeed.textContent = me.v.toFixed(1);
+    hCombo.textContent = combo;
+  }
+
+  function showEnd(){
+    phase='done';
+    const me=swimmers[PLAYER];
+    const names=['第 1 名！','第 2 名','第 3 名','第 4 名'];
+    $('endTitle').textContent = names[me.place-1];
+    $('endTime').textContent = me.finish.toFixed(2)+' 秒';
+    const best=readBest();
+    let note;
+    if(best===null || me.finish<best){ saveBest(me.finish); note = best===null ? '第一次成绩已记录。' : '新纪录！比之前快了 '+(best-me.finish).toFixed(2)+' 秒。'; }
+    else note = '最好成绩：'+best.toFixed(2)+' 秒。';
+    if(me.place>1) note += ' 试试保持每次划水的间隔一样长。';
+    $('endNote').textContent = note;
+    endOv.hidden=false; showBest();
+    $('againBtn').focus();
+  }
+
+  // ---------- draw ----------
+  function sizeOf(g){ return Math.max(6, Math.min(g.lw*0.17, 13)); }
+
+  function drawPool(g){
+    const {x0,y0,pw,ph,lw}=g;
+    // water
+    const grad=ctx.createLinearGradient(0,y0,0,y0+ph);
+    grad.addColorStop(0,'#1E9BE0'); grad.addColorStop(1,'#1477BD');
+    ctx.save();
+    roundRect(x0,y0,pw,ph,14); ctx.fillStyle=grad; ctx.fill(); ctx.clip();
+    // tiles
+    ctx.strokeStyle='rgba(255,255,255,0.07)'; ctx.lineWidth=1;
+    for(let x=x0;x<x0+pw;x+=16){ ctx.beginPath(); ctx.moveTo(x+.5,y0); ctx.lineTo(x+.5,y0+ph); ctx.stroke(); }
+    for(let y=y0;y<y0+ph;y+=16){ ctx.beginPath(); ctx.moveTo(x0,y+.5); ctx.lineTo(x0+pw,y+.5); ctx.stroke(); }
+    // caustics
+    ctx.strokeStyle='rgba(255,255,255,0.10)'; ctx.lineWidth=2;
+    for(let k=0;k<7;k++){
+      ctx.beginPath();
+      const by=y0+((k*ph/6 + t*14)%(ph+40))-20;
+      for(let x=x0;x<=x0+pw;x+=8){
+        const y=by+Math.sin(x*0.045+t*1.3+k)*5;
+        x===x0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+    }
+    // lane floor stripes with T ends
+    ctx.fillStyle='rgba(8,40,80,0.45)';
+    for(let i=0;i<4;i++){
+      const cx=x0+lw*(i+0.5), w=Math.max(4,lw*0.07);
+      const top=y0+ph*0.08, bot=y0+ph*0.92;
+      ctx.fillRect(cx-w/2,top,w,bot-top);
+      ctx.fillRect(cx-w*2.2,top,w*4.4,w); ctx.fillRect(cx-w*2.2,bot-w,w*4.4,w);
+    }
+    // halfway line marker
+    const mid=g.yStart-(25/LEN)*(g.yStart-g.yEnd);
+    ctx.setLineDash([4,6]); ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x0,mid); ctx.lineTo(x0+pw,mid); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.font='600 11px "Baloo 2",sans-serif';
+    ctx.fillText('25m',x0+4,mid-4);
+    // player lane glow
+    ctx.fillStyle='rgba(255,201,60,0.08)';
+    ctx.fillRect(x0+lw*PLAYER,y0,lw,ph);
+    // lane ropes
+    for(let i=1;i<4;i++){
+      const rx=x0+lw*i;
+      for(let y=y0+6, n=0; y<y0+ph-4; y+=9, n++){
+        const nearEnd = y<y0+ph*0.1 || y>y0+ph*0.9;
+        ctx.fillStyle = nearEnd ? '#E63946' : (n%2 ? '#FFFFFF' : '#2B6FD6');
+        ctx.beginPath(); ctx.arc(rx,y,3.6,0,Math.PI*2); ctx.fill();
+      }
+    }
+    // finish wall touchpad
+    ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.fillRect(x0,y0,pw,5);
+    ctx.restore();
+    // pool edge
+    roundRect(x0,y0,pw,ph,14); ctx.lineWidth=3; ctx.strokeStyle='rgba(255,255,255,0.9)'; ctx.stroke();
+  }
+
+  function drawSwimmer(s,g){
+    const p=swimmerXY(s,g), S=sizeOf(g), x=p.x, y=p.y;
+    // wake
+    if(s.v>0.2){
+      ctx.fillStyle='rgba(255,255,255,'+Math.min(0.28,s.v*0.11)+')';
+      ctx.beginPath(); ctx.ellipse(x,y+S*3.4,S*1.4,S*(2+s.v*1.4),0,0,Math.PI*2); ctx.fill();
+    }
+    // body
+    ctx.fillStyle='rgba(232,180,138,0.9)';
+    ctx.beginPath(); ctx.ellipse(x,y+S*1.7,S*0.78,S*1.9,0,0,Math.PI*2); ctx.fill();
+    // legs (flutter kick)
+    const kick=Math.sin(t*14+s.lane)*S*0.35*(s.v>0.1?1:0.2);
+    ctx.strokeStyle='rgba(232,180,138,0.9)'; ctx.lineCap='round'; ctx.lineWidth=S*0.42;
+    ctx.beginPath(); ctx.moveTo(x-S*0.3,y+S*3.2); ctx.lineTo(x-S*0.35+kick,y+S*4.6); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+S*0.3,y+S*3.2); ctx.lineTo(x+S*0.35-kick,y+S*4.6); ctx.stroke();
+    // arms
+    drawArm(x,y,S,-1,t-s.lastL);
+    drawArm(x,y,S, 1,t-s.lastR);
+    // head + cap
+    ctx.fillStyle=s.cap;
+    ctx.beginPath(); ctx.arc(x,y,S*0.78,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(13,43,69,0.85)';
+    ctx.fillRect(x-S*0.62,y+S*0.12,S*1.24,S*0.2);
+    // label
+    if(s.player){
+      ctx.strokeStyle='#FFFFFF'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(x,y,S*1.25+Math.sin(t*5)*1.2,0,Math.PI*2); ctx.stroke();
+    }
+    ctx.fillStyle='#FFFFFF'; ctx.font='700 '+(s.player?13:11)+'px "Baloo 2","PingFang SC",sans-serif';
+    ctx.textAlign='center'; ctx.fillText(s.name,x,y+S*6);
+    if(s.place){ ctx.font='800 14px "Baloo 2",sans-serif'; ctx.fillText('#'+s.place,x,y-S*3.4); }
+    ctx.textAlign='left';
+  }
+  function drawArm(x,y,S,dir,age){
+    const sx=x+dir*S*0.8, sy=y+S*0.45;
+    let hx,hy;
+    const pull=0.5;
+    if(age>=0 && age<pull){
+      const k=age/pull, e=k*k*(3-2*k);
+      hx=x+dir*S*(0.45+0.6*Math.sin(e*Math.PI)); hy=y-S*2.5+e*S*5.4;
+    } else if(age>=pull && age<pull+0.18){
+      const k=(age-pull)/0.18;           // recovery over the water
+      hx=x+dir*S*(1.1+0.4*Math.sin(k*Math.PI)); hy=y+S*2.9-k*S*5.4;
+    } else { hx=x+dir*S*0.45; hy=y-S*2.5; }  // extended, gliding
+    ctx.strokeStyle='rgba(232,180,138,0.95)'; ctx.lineWidth=S*0.48; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(hx,hy); ctx.stroke();
+  }
+
+  function roundRect(x,y,w,h,r){
+    ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    const g=geo();
+    drawPool(g);
+    swimmers.forEach(s=>drawSwimmer(s,g));
+    particles.forEach(p=>{
+      ctx.fillStyle='rgba(255,255,255,'+Math.min(0.9,p.life*1.6)+')';
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+    });
+    ctx.textAlign='center';
+    pops.forEach(p=>{
+      ctx.globalAlpha=Math.min(1,p.life*2);
+      ctx.font='800 '+(p.big?30:17)+'px "Baloo 2","PingFang SC",sans-serif';
+      ctx.lineWidth=4; ctx.strokeStyle='rgba(8,40,70,0.55)'; ctx.strokeText(p.text,p.x,p.y);
+      ctx.fillStyle=p.color; ctx.fillText(p.text,p.x,p.y);
+    });
+    ctx.globalAlpha=1;
+    if(phase==='countdown'){
+      const n=Math.ceil(countdown);
+      const frac=countdown-Math.floor(countdown);
+      ctx.font='800 '+(70+frac*30)+'px "Baloo 2",sans-serif';
+      ctx.lineWidth=6; ctx.strokeStyle='rgba(8,40,70,0.5)';
+      ctx.strokeText(n,W/2,H*0.45); ctx.fillStyle='#FFFFFF'; ctx.fillText(n,W/2,H*0.45);
+    }
+    ctx.textAlign='left';
+  }
+
+  let last=performance.now();
+  function loop(now){
+    const dt=Math.min(0.05,(now-last)/1000); last=now;
+    update(dt); draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
